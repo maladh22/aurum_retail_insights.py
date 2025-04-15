@@ -1,0 +1,84 @@
+"""
+aurum_sales_returns_report.py
+
+Generates Excel reports for sales and return quantities across multiple locations
+for a fictional analytics company. The report includes sales data, return data,
+net sales, and subtotals grouped by company, MP name, sales channel, and SKU.
+
+Author: Mala Dhangar
+"""
+
+import pandas as pd
+
+def process_location_data(sales_df, returns_df, company_prefix, company_column, sheet_name):
+    sales_filtered = sales_df[sales_df['Company Name'].str.startswith(company_prefix, na=False)]
+    sales_filtered = sales_filtered[sales_filtered['Order Status'].isin(['Shipped', 'Returned'])]
+
+    returns_filtered = returns_df[returns_df['Company Name'].str.startswith(company_prefix, na=False)]
+    returns_filtered = returns_filtered[returns_filtered['Order Status'].isin(['Shipped', 'Returned'])]
+
+    combined = pd.concat([
+        sales_filtered[['Company Name', 'MP Name', 'Sales Channel', 'Component SKU']],
+        returns_filtered[['Company Name', 'MP Name', 'Sales Channel', 'Component SKU']]
+    ]).drop_duplicates().reset_index(drop=True)
+
+    combined.rename(columns={'Company Name': company_column}, inplace=True)
+
+    sales_qty = sales_filtered.groupby(
+        ['Company Name', 'MP Name', 'Sales Channel', 'Component SKU'], as_index=False
+    )['Item Quantity'].sum()
+    sales_qty.rename(columns={'Company Name': company_column, 'Item Quantity': 'Sales Item Quantity'}, inplace=True)
+
+    return_qty = returns_filtered.groupby(
+        ['Company Name', 'MP Name', 'Sales Channel', 'Component SKU'], as_index=False
+    )['Item Quantity'].sum()
+    return_qty.rename(columns={'Company Name': company_column, 'Item Quantity': 'Return Item Quantity'}, inplace=True)
+
+    combined = combined.merge(sales_qty, on=[company_column, 'MP Name', 'Sales Channel', 'Component SKU'], how='left')
+    combined = combined.merge(return_qty, on=[company_column, 'MP Name', 'Sales Channel', 'Component SKU'], how='left')
+
+    combined['Sales Item Quantity'] = combined['Sales Item Quantity'].fillna(0)
+    combined['Return Item Quantity'] = combined['Return Item Quantity'].fillna(0)
+
+    summary = combined.groupby(
+        [company_column, 'MP Name', 'Sales Channel', 'Component SKU'], as_index=False
+    ).agg({
+        'Sales Item Quantity': 'sum',
+        'Return Item Quantity': 'sum'
+    })
+
+    subtotal = {
+        company_column: 'Subtotal',
+        'Sales Item Quantity': summary['Sales Item Quantity'].sum(),
+        'Return Item Quantity': summary['Return Item Quantity'].sum()
+    }
+    subtotal.update({col: '' for col in summary.columns if col not in subtotal})
+    summary = pd.concat([summary, pd.DataFrame([subtotal])], ignore_index=True)
+
+    summary['Net Sales'] = summary['Sales Item Quantity'] - summary['Return Item Quantity']
+
+    return summary, sheet_name
+
+
+def generate_excel_report(sales_path, returns_path, output_path):
+    sales_df = pd.read_csv(sales_path, low_memory=False)
+    returns_df = pd.read_csv(returns_path, low_memory=False)
+
+    locations = [
+        ("Aurum Analytics - Bangalore", "Bangalore_Company", "Bangalore"),
+        ("Aurum Analytics - Kolkata", "Kolkata_Company", "Kolkata"),
+        ("Aurum Analytics - Mumbai", "Mumbai_Company", "Mumbai"),
+        ("Aurum Analytics - Bilaspur", "Bilaspur_Company", "Bilaspur"),
+    ]
+
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        for prefix, col_name, sheet in locations:
+            df, sheet_name = process_location_data(sales_df, returns_df, prefix, col_name, sheet)
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+if __name__ == "__main__":
+    generate_excel_report(
+        sales_path='sales_test.csv',
+        returns_path='return_report.csv',
+        output_path='Aurum_Analytics_Sales_Report.xlsx'
+    )
